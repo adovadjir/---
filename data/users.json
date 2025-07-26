@@ -1,0 +1,27 @@
+{
+  "users": {
+    "1389542183320682556": {
+      "balance": 0,
+      "history": [
+        "اشرح لي كيف يعمل الذكاء الاصطناعي"
+      ]
+    }
+  },
+  "servers": {
+    "1392505497327894639": {
+      "sensitive": {
+        "all": false,
+        "allowed": []
+      },
+      "general": {
+        "all": true,
+        "allowed": []
+      },
+      "channels": {}
+    }
+  },
+  "tickets": {},
+  "settings": {
+    "1392505497327894639": {}
+  }
+}
