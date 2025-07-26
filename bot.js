@@ -29,7 +29,7 @@ const {
 } = process.env;
 
 // تحقق من وجود التوكن قبل الإقلاع
-if (!DISCORD_TOKEN || typeof DISCORD_TOKEN !== 'string') {
+if (!DISCORD || typeof DISCORD !== 'string') {
   console.error('❌ DISCORD_TOKEN is missing or invalid. Please set it in Railway Variables.');
   process.exit(1);
 }
@@ -201,4 +201,4 @@ client.on('messageCreate', async msg => {
 });
 
 // وأخيراً تسجيل الدخول
-client.login(DISCORD_TOKEN);
+client.login(DISCORD);
