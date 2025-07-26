@@ -1,4 +1,3 @@
-// لا داعي لاستدعاء dotenv على Railway، لكنه يفيد محلياً
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -18,7 +17,6 @@ const client = new Client({
   ],
 });
 
-// قراءة المتغيرات من بيئة التشغيل
 const {
   DISCORD,
   GITHUB_TOKEN,
@@ -28,9 +26,8 @@ const {
   BOT_OWNER_ID
 } = process.env;
 
-// تحقق من وجود التوكن قبل الإقلاع
 if (!DISCORD || typeof DISCORD !== 'string') {
-  console.error('❌ DISCORD_TOKEN is missing or invalid. Please set it in Railway Variables.');
+  console.error('❌ DISCORD is missing or invalid. Please set it in Railway Variables.');
   process.exit(1);
 }
 
@@ -38,7 +35,6 @@ const TMP = os.tmpdir();
 let dataCache = { users: {}, servers: {}, tickets: {}, settings: {} };
 let githubSha = null;
 
-// تحميل البيانات من GitHub
 async function loadData() {
   try {
     const res = await axios.get(
@@ -53,7 +49,6 @@ async function loadData() {
   }
 }
 
-// حفظ البيانات إلى GitHub
 async function saveData() {
   try {
     const content = Buffer.from(JSON.stringify(dataCache, null, 2)).toString('base64');
@@ -68,7 +63,6 @@ async function saveData() {
   }
 }
 
-// مناداة Gemini API
 async function callGemini(prompt) {
   try {
     const res = await axios.post(
@@ -82,7 +76,6 @@ async function callGemini(prompt) {
   }
 }
 
-// تحليل ملف مرفق
 async function analyzeFile(att, msg) {
   const filePath = path.join(TMP, `${Date.now()}_${att.name}`);
   try {
@@ -106,7 +99,6 @@ async function analyzeFile(att, msg) {
   }
 }
 
-// صلاحيات الأوامر
 function canSensitive(s, u, m) {
   return (
     s.sensitive?.all ||
@@ -119,7 +111,6 @@ function canGeneral(s, u) {
   return s.general?.all || s.general?.allowed?.includes(u);
 }
 
-// تشغيل البوت
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   await loadData();
@@ -134,7 +125,6 @@ client.on('messageCreate', async msg => {
   const guildId = msg.guild?.id;
   const member = msg.member;
 
-  // تهيئة البيانات إن لم توجد
   dataCache.users[userId] ||= { balance: 0, history: [] };
   dataCache.servers[guildId] ||= {
     sensitive: { all: false, allowed: [] },
@@ -200,5 +190,4 @@ client.on('messageCreate', async msg => {
   }
 });
 
-// وأخيراً تسجيل الدخول
 client.login(DISCORD);
