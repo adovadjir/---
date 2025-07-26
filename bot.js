@@ -22,12 +22,17 @@ const {
   GITHUB_TOKEN,
   GITHUB_REPO,
   GITHUB_FILE = 'data/users.json',
-  GEMINI_API_KEY,
-  BOT_OWNER_ID
+  BOT_OWNER_ID,
+  AI_API_KEY
 } = process.env;
 
 if (!DISCORD || typeof DISCORD !== 'string') {
-  console.error('❌ DISCORD is missing or invalid. Please set it in Railway Variables.');
+  console.error('❌ DISCORD token is missing or invalid.');
+  process.exit(1);
+}
+
+if (!AI_API_KEY || typeof AI_API_KEY !== 'string') {
+  console.error('❌ AI_API_KEY is missing or invalid.');
   process.exit(1);
 }
 
@@ -63,16 +68,27 @@ async function saveData() {
   }
 }
 
-async function callGemini(prompt) {
+// استدعاء نموذج AI عبر OpenRouter (mistral-7b-instruct:free)
+async function callAI(prompt) {
   try {
     const res = await axios.post(
-      'https://api.gemini.example.com/v1/chat',
-      { prompt },
-      { headers: { Authorization: `Bearer ${GEMINI_API_KEY}` } }
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        model: 'mistralai/mistral-7b-instruct:free',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${AI_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
     );
     return res.data?.choices?.[0]?.message?.content || 'No response';
-  } catch {
-    return 'Gemini connection error';
+  } catch (e) {
+    console.error('AI request failed:', e.response?.data || e.message);
+    return 'حدث خطأ أثناء الاتصال بالنموذج.';
   }
 }
 
@@ -85,9 +101,9 @@ async function analyzeFile(att, msg) {
     let result = '';
     if (['.txt', '.json'].includes(ext)) {
       const content = fs.readFileSync(filePath, 'utf8');
-      result = await callGemini(`Analyze this text:\n${content}`);
+      result = await callAI(`Analyze this text:\n${content}`);
     } else if (['.jpg', '.png', '.gif'].includes(ext)) {
-      result = await callGemini('Describe this image in detail.');
+      result = await callAI('Describe this image in detail.');
     } else {
       result = 'Unsupported file type';
     }
@@ -123,7 +139,6 @@ client.on('messageCreate', async msg => {
   const cmd = args.shift().toLowerCase();
   const userId = msg.author.id;
   const guildId = msg.guild?.id;
-  const member = msg.member;
 
   dataCache.users[userId] ||= { balance: 0, history: [] };
   dataCache.servers[guildId] ||= {
@@ -163,8 +178,8 @@ client.on('messageCreate', async msg => {
         if (!args.length) return msg.reply('اكتب سؤالك بعد الأمر');
         userData.history.push(args.join(' '));
         if (userData.history.length > 20) userData.history.shift();
-        const response = await callGemini(userData.history.join('\n'));
-        await msg.reply(response);
+        const aiResponse = await callAI(userData.history.join('\n'));
+        await msg.reply(aiResponse);
         await saveData();
         return;
       case 'ملف':
@@ -191,3 +206,4 @@ client.on('messageCreate', async msg => {
 });
 
 client.login(DISCORD);
+```0
