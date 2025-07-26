@@ -17,16 +17,17 @@ const client = new Client({
   ],
 });
 
-// تحميل المتغيرات البيئية
+// تحميل المتغيرات البيئية من ملف .env
 const {
-  DISCORD,
-  GITHUB_TOKEN,
-  GITHUB_REPO,
-  GITHUB_FILE = 'data/users.json',
-  BOT_OWNER_ID,
-  AI_API_KEY
+  DISCORD,          // توكن بوت ديسكورد
+  GITHUB_TOKEN,     // توكن GitHub (اختياري للحفظ على مستودع)
+  GITHUB_REPO,      // اسم مستودع GitHub (اختياري)
+  GITHUB_FILE = 'data/users.json',  // ملف البيانات على GitHub
+  BOT_OWNER_ID,     // ID المالك الذي يمكنه صلاحيات خاصة
+  AI_API_KEY        // مفتاح API للنموذج الذكي
 } = process.env;
 
+// التأكد من وجود التوكنات المطلوبة
 if (!DISCORD || typeof DISCORD !== 'string') {
   console.error('❌ DISCORD token is missing or invalid.');
   process.exit(1);
@@ -37,12 +38,14 @@ if (!AI_API_KEY || typeof AI_API_KEY !== 'string') {
   process.exit(1);
 }
 
-// متغيرات عامة
+// مجلد تخزين مؤقت للملفات المؤقتة
 const TMP = os.tmpdir();
+
+// ذاكرة مؤقتة لتخزين بيانات المستخدمين والسيرفرات والتذاكر
 let dataCache = { users: {}, servers: {}, tickets: {}, settings: {} };
 let githubSha = null;
 
-// تحميل البيانات من GitHub
+// تحميل البيانات من GitHub (اختياري)
 async function loadData() {
   try {
     const res = await axios.get(
@@ -59,7 +62,7 @@ async function loadData() {
   }
 }
 
-// حفظ البيانات في GitHub
+// حفظ البيانات إلى GitHub (اختياري)
 async function saveData() {
   try {
     const content = Buffer.from(JSON.stringify(dataCache, null, 2)).toString('base64');
@@ -75,7 +78,7 @@ async function saveData() {
   }
 }
 
-// استدعاء نموذج AI عبر OpenRouter (deepseek/deepseek-r1:free)
+// دالة لاستدعاء نموذج الذكاء الاصطناعي عبر OpenRouter API
 async function callAI(prompt) {
   try {
     const res = await axios.post(
@@ -100,7 +103,7 @@ async function callAI(prompt) {
   }
 }
 
-// تحليل الملفات المرفقة
+// دالة لتحليل الملفات المرفقة (نصوص وصور)
 async function analyzeFile(att, msg) {
   const filePath = path.join(TMP, `${Date.now()}_${att.name}`);
   try {
@@ -125,7 +128,7 @@ async function analyzeFile(att, msg) {
   }
 }
 
-// صلاحيات الأوامر الخاصة
+// صلاحيات الأوامر الخاصة (مثلاً أوامر المالك)
 function canSensitive(serverData, userId, member) {
   return (
     serverData.sensitive?.all ||
@@ -139,7 +142,7 @@ function canGeneral(serverData, userId) {
   return serverData.general?.all || serverData.general?.allowed?.includes(userId);
 }
 
-// سجل بسيط لتتبع الأداء
+// لتسجيل تنفيذ الأوامر لغرض التتبع
 function logCommandExecution(cmd, userId) {
   const time = new Date().toLocaleString();
   console.log(`[${time}] User ${userId} executed command: ${cmd}`);
@@ -151,7 +154,7 @@ client.once('ready', async () => {
   await loadData();
 });
 
-// استقبال الرسائل
+// استقبال الرسائل ومعالجتها
 client.on('messageCreate', async msg => {
   try {
     if (msg.author.bot || !msg.content.startsWith('!')) return;
@@ -161,7 +164,7 @@ client.on('messageCreate', async msg => {
     const userId = msg.author.id;
     const guildId = msg.guild?.id || 'dm';
 
-    // إعداد البيانات
+    // تهيئة بيانات المستخدم والسيرفر إذا لم تكن موجودة
     dataCache.users[userId] ||= { balance: 0, history: [] };
     dataCache.servers[guildId] ||= {
       sensitive: { all: false, allowed: [] },
@@ -178,9 +181,11 @@ client.on('messageCreate', async msg => {
 
     switch (cmd) {
       case 'رصيدي':
+        // يعرض رصيد المستخدم الحالي
         return msg.reply(`رصيدك الحالي: ${userData.balance} نقطة.`);
 
       case 'اضف':
+        // إضافة نقاط لمستخدم (للمالك فقط)
         if (userId !== BOT_OWNER_ID) return msg.reply('❌ أنت غير مخول لاستخدام هذا الأمر.');
         if (args.length < 2) return msg.reply('الاستخدام: !اضف @user عدد');
         const mention = msg.mentions.users.first();
@@ -192,6 +197,7 @@ client.on('messageCreate', async msg => {
         return msg.reply(`✅ تم إضافة ${amount} نقطة إلى ${mention.tag}.`);
 
       case 'حول':
+        // تحويل نقاط بين المستخدمين
         if (args.length < 2) return msg.reply('الاستخدام: !حول @user عدد');
         const to = msg.mentions.users.first();
         const amt = parseInt(args[1]);
@@ -204,16 +210,17 @@ client.on('messageCreate', async msg => {
         return msg.reply(`✅ تم تحويل ${amt} نقطة إلى ${to.tag}.`);
 
       case 'ai':
+        // التحدث مع نموذج AI أو طلب إنشاء/تعديل أكواد
         if (!args.length) return msg.reply('يرجى كتابة سؤالك بعد الأمر.');
         const prompt = args.join(' ');
         userData.history.push(prompt);
         if (userData.history.length > 20) userData.history.shift();
 
-        // هل الطلب يتعلق بإضافة أو تعديل كود؟
+        // كشف نية توليد كود (إنشاء/تعديل)
         const codeIntent = /^(.*(?:أنشئ|اصنع|أضف|اضافة|كود|أمر جديد).*)$/i.test(prompt);
 
         if (codeIntent) {
-          // بناء prompt لتوليد الكود فقط
+          // بناء طلب مخصص لتوليد الكود فقط (لتفادي الشرح المرافق)
           const devPrompt = `
 لدي بوت ديسكورد مبني بـ discord.js. هذا هو الكود الحالي:
 """
@@ -230,7 +237,7 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
             return msg.reply('⚠️ لم أتمكن من توليد كود صالح.');
           }
 
-          // تنفيذ الكود داخل VM آمن
+          // تنفيذ الكود داخل بيئة آمنة (NodeVM) لمنع الأخطاء أو الأضرار
           try {
             const vm = new NodeVM({ timeout: 5000, sandbox: { client, msg, dataCache, console } });
             const result = await vm.run(generatedCode)();
@@ -243,17 +250,19 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
           return;
         }
 
-        // طلب عادي للنموذج
+        // طلب عادي للنموذج (ردود عامة)
         const response = await callAI(userData.history.join('\n'));
         await msg.reply(response);
         await saveData();
         return;
 
       case 'ملف':
+        // تحليل الملفات المرفقة (يدعم النصوص والصور)
         if (!msg.attachments.size) return msg.reply('يرجى إرفاق ملف أولاً.');
         return analyzeFile(msg.attachments.first(), msg);
 
       case 'شغلاداة':
+        // تنفيذ كود يدوي داخل بيئة آمنة (للمالك فقط)
         if (userId !== BOT_OWNER_ID) return msg.reply('❌ أنت غير مخول لاستخدام هذا الأمر.');
         if (!args.length) return msg.reply('يرجى كتابة كود للتنفيذ.');
         try {
@@ -265,6 +274,7 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
         }
 
       case 'تذاكر':
+        // نظام إدارة التذاكر البسيط
         if (!serverData.tickets) serverData.tickets = {};
         if (!args.length) return msg.reply('اكتب: !تذاكر انشاء | !تذاكر اغلاق | !تذاكر الحالة');
         switch (args[0]) {
@@ -272,7 +282,7 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
             if (serverData.tickets[userId]) return msg.reply('لديك تذكرة مفتوحة بالفعل.');
             const channel = await msg.guild.channels.create({
               name: `ticket-${msg.author.username}`,
-              type: 0,
+              type: 0, // قناة نصية
               permissionOverwrites: [
                 { id: msg.guild.roles.everyone.id, deny: ['ViewChannel'] },
                 { id: userId, allow: ['ViewChannel', 'SendMessages'] }
@@ -300,6 +310,7 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
         }
 
       case 'مساعدة':
+        // قائمة الأوامر الأساسية
         return msg.reply(
           '🛠️ **أوامر البوت:**\n' +
           '!رصيدي - عرض رصيدك من النقاط\n' +
@@ -313,6 +324,7 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
         );
 
       default:
+        // رد على أمر غير معروف مع التحقق من صلاحية الاستخدام
         if (!canGeneral(serverData, userId)) return;
         return msg.reply('❓ أمر غير معروف، اكتب !مساعدة لمعرفة الأوامر.');
     }
@@ -322,5 +334,5 @@ ${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
   }
 });
 
-// تسجيل الدخول
+// تسجيل الدخول إلى ديسكورد باستخدام التوكن
 client.login(DISCORD);
