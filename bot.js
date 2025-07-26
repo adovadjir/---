@@ -1,4 +1,8 @@
-require('dotenv').config();
+// لا داعي لاستدعاء dotenv على Railway، لكنه يفيد محلياً
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
 const { Client, GatewayIntentBits, PermissionsBitField } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
@@ -7,9 +11,14 @@ const { NodeVM } = require('vm2');
 const os = require('os');
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
 });
 
+// قراءة المتغيرات من بيئة التشغيل
 const {
   DISCORD_TOKEN,
   GITHUB_TOKEN,
@@ -19,15 +28,22 @@ const {
   BOT_OWNER_ID
 } = process.env;
 
+// تحقق من وجود التوكن قبل الإقلاع
+if (!DISCORD_TOKEN || typeof DISCORD_TOKEN !== 'string') {
+  console.error('❌ DISCORD_TOKEN is missing or invalid. Please set it in Railway Variables.');
+  process.exit(1);
+}
+
 const TMP = os.tmpdir();
 let dataCache = { users: {}, servers: {}, tickets: {}, settings: {} };
 let githubSha = null;
 
+// تحميل البيانات من GitHub
 async function loadData() {
   try {
     const res = await axios.get(
       `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE}`,
-      { headers: { Authorization: `token ${GITHUB_TOKEN}` } }
+      { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } }
     );
     const file = await axios.get(res.data.download_url);
     dataCache = JSON.parse(file.data);
@@ -37,13 +53,14 @@ async function loadData() {
   }
 }
 
+// حفظ البيانات إلى GitHub
 async function saveData() {
   try {
     const content = Buffer.from(JSON.stringify(dataCache, null, 2)).toString('base64');
     const res = await axios.put(
       `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE}`,
       { message: 'update data', content, sha: githubSha },
-      { headers: { Authorization: `token ${GITHUB_TOKEN}` } }
+      { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } }
     );
     githubSha = res.data.content.sha;
   } catch (e) {
@@ -51,6 +68,7 @@ async function saveData() {
   }
 }
 
+// مناداة Gemini API
 async function callGemini(prompt) {
   try {
     const res = await axios.post(
@@ -64,6 +82,7 @@ async function callGemini(prompt) {
   }
 }
 
+// تحليل ملف مرفق
 async function analyzeFile(att, msg) {
   const filePath = path.join(TMP, `${Date.now()}_${att.name}`);
   try {
@@ -87,6 +106,7 @@ async function analyzeFile(att, msg) {
   }
 }
 
+// صلاحيات الأوامر
 function canSensitive(s, u, m) {
   return (
     s.sensitive?.all ||
@@ -99,79 +119,86 @@ function canGeneral(s, u) {
   return s.general?.all || s.general?.allowed?.includes(u);
 }
 
+// تشغيل البوت
 client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
   await loadData();
 });
 
 client.on('messageCreate', async msg => {
   if (msg.author.bot || !msg.content.startsWith('!')) return;
+
   const args = msg.content.slice(1).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
   const userId = msg.author.id;
   const guildId = msg.guild?.id;
   const member = msg.member;
 
-  if (!dataCache.users[userId]) dataCache.users[userId] = { balance: 0, history: [] };
-  if (!dataCache.servers[guildId]) dataCache.servers[guildId] = {
+  // تهيئة البيانات إن لم توجد
+  dataCache.users[userId] ||= { balance: 0, history: [] };
+  dataCache.servers[guildId] ||= {
     sensitive: { all: false, allowed: [] },
     general: { all: true, allowed: [] },
     channels: {}
   };
-  if (!dataCache.settings[guildId]) dataCache.settings[guildId] = {};
+  dataCache.settings[guildId] ||= {};
 
   const userData = dataCache.users[userId];
   const serverData = dataCache.servers[guildId];
 
-  switch (cmd) {
-    case 'رصيدي':
-      return msg.reply(`Your balance: ${userData.balance}`);
-    case 'اضف':
-      if (userId !== BOT_OWNER_ID) return msg.reply('Not allowed');
-      const mention = msg.mentions.users.first();
-      const amount = parseInt(args[1]);
-      if (!mention || isNaN(amount) || amount <= 0) return msg.reply('Usage: !اضف @user amount');
-      if (!dataCache.users[mention.id]) dataCache.users[mention.id] = { balance: 0, history: [] };
-      dataCache.users[mention.id].balance += amount;
-      await saveData();
-      return msg.reply(`Added ${amount} to ${mention.tag}`);
-    case 'حول':
-      const to = msg.mentions.users.first();
-      const amt = parseInt(args[1]);
-      if (!to || isNaN(amt) || amt <= 0) return msg.reply('Usage: !حول @user amount');
-      if (userData.balance < amt) return msg.reply('Insufficient');
-      if (!dataCache.users[to.id]) dataCache.users[to.id] = { balance: 0, history: [] };
-      userData.balance -= amt;
-      dataCache.users[to.id].balance += amt;
-      await saveData();
-      return msg.reply(`Transferred ${amt} to ${to.tag}`);
-    case 'gemini':
-      if (!args.length) return msg.reply('Send a query');
-      userData.history.push(args.join(' '));
-      if (userData.history.length > 20) userData.history.shift();
-      const response = await callGemini(userData.history.join('\n'));
-      await msg.reply(response);
-      await saveData();
-      return;
-    case 'ملف':
-      if (!msg.attachments.size) return msg.reply('Attach a file');
-      return analyzeFile(msg.attachments.first(), msg);
-    case 'شغلاداة':
-      if (userId !== BOT_OWNER_ID) return msg.reply('Not allowed');
-      if (!args.length) return msg.reply('Provide code');
-      try {
-        const vm = new NodeVM({ timeout: 5000, sandbox: { client, msg, dataCache } });
-        const result = vm.run(`module.exports = async () => { ${args.join(' ')} }`)();
-        const out = await result;
-        return msg.reply(`Result: ${out}`);
-      } catch (e) {
-        return msg.reply(`Error: ${e.message}`);
-      }
-    default:
-      if (!canGeneral(serverData, userId)) return;
-      return msg.reply('Unknown command');
+  try {
+    switch (cmd) {
+      case 'رصيدي':
+        return msg.reply(`رصيدك: ${userData.balance}`);
+      case 'اضف':
+        if (userId !== BOT_OWNER_ID) return msg.reply('غير مخول');
+        const mention = msg.mentions.users.first();
+        const amount = parseInt(args[1]);
+        if (!mention || isNaN(amount) || amount <= 0) return msg.reply('الاستخدام: !اضف @user amount');
+        dataCache.users[mention.id] ||= { balance: 0, history: [] };
+        dataCache.users[mention.id].balance += amount;
+        await saveData();
+        return msg.reply(`تم إضافة ${amount} إلى ${mention.tag}`);
+      case 'حول':
+        const to = msg.mentions.users.first();
+        const amt = parseInt(args[1]);
+        if (!to || isNaN(amt) || amt <= 0) return msg.reply('الاستخدام: !حول @user amount');
+        if (userData.balance < amt) return msg.reply('رصيدك غير كافي');
+        dataCache.users[to.id] ||= { balance: 0, history: [] };
+        userData.balance -= amt;
+        dataCache.users[to.id].balance += amt;
+        await saveData();
+        return msg.reply(`تم تحويل ${amt} إلى ${to.tag}`);
+      case 'gemini':
+        if (!args.length) return msg.reply('اكتب سؤالك بعد الأمر');
+        userData.history.push(args.join(' '));
+        if (userData.history.length > 20) userData.history.shift();
+        const response = await callGemini(userData.history.join('\n'));
+        await msg.reply(response);
+        await saveData();
+        return;
+      case 'ملف':
+        if (!msg.attachments.size) return msg.reply('أرفق الملف أولاً');
+        return analyzeFile(msg.attachments.first(), msg);
+      case 'شغلاداة':
+        if (userId !== BOT_OWNER_ID) return msg.reply('غير مخول');
+        if (!args.length) return msg.reply('ضع كود للتنفيذ');
+        try {
+          const vm = new NodeVM({ timeout: 5000, sandbox: { client, msg, dataCache } });
+          const result = await vm.run(`module.exports = async () => { ${args.join(' ')} }`)();
+          return msg.reply(`النتيجة: ${result}`);
+        } catch (e) {
+          return msg.reply(`خطأ بالتنفيذ: ${e.message}`);
+        }
+      default:
+        if (!canGeneral(serverData, userId)) return;
+        return msg.reply('أمر غير معروف');
+    }
+  } catch (e) {
+    console.error(`Command ${cmd} failed:`, e);
+    msg.reply('حدث خطأ أثناء تنفيذ الأمر.');
   }
-  await saveData();
 });
 
+// وأخيراً تسجيل الدخول
 client.login(DISCORD_TOKEN);
