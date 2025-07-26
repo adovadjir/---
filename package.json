@@ -1,0 +1,14 @@
+{
+  "name": "discord-bot-final",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.11.0",
+    "axios": "^1.6.8",
+    "dotenv": "^16.3.1",
+    "vm2": "^3.9.18"
+  }
+}
