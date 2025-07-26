@@ -6,8 +6,8 @@ const { Client, GatewayIntentBits, PermissionsBitField } = require('discord.js')
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { NodeVM } = require('vm2');
 const os = require('os');
+const { NodeVM } = require('vm2');
 
 const client = new Client({
   intents: [
@@ -17,6 +17,7 @@ const client = new Client({
   ],
 });
 
+// تحميل المتغيرات البيئية
 const {
   DISCORD,
   GITHUB_TOKEN,
@@ -36,10 +37,12 @@ if (!AI_API_KEY || typeof AI_API_KEY !== 'string') {
   process.exit(1);
 }
 
+// متغيرات عامة
 const TMP = os.tmpdir();
 let dataCache = { users: {}, servers: {}, tickets: {}, settings: {} };
 let githubSha = null;
 
+// تحميل البيانات من GitHub
 async function loadData() {
   try {
     const res = await axios.get(
@@ -49,11 +52,14 @@ async function loadData() {
     const file = await axios.get(res.data.download_url);
     dataCache = JSON.parse(file.data);
     githubSha = res.data.sha;
-  } catch {
+    console.log('✅ Data loaded from GitHub.');
+  } catch (e) {
+    console.warn('⚠️ Failed to load data, initializing empty cache.');
     dataCache = { users: {}, servers: {}, tickets: {}, settings: {} };
   }
 }
 
+// حفظ البيانات في GitHub
 async function saveData() {
   try {
     const content = Buffer.from(JSON.stringify(dataCache, null, 2)).toString('base64');
@@ -63,12 +69,13 @@ async function saveData() {
       { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } }
     );
     githubSha = res.data.content.sha;
+    console.log('✅ Data saved to GitHub.');
   } catch (e) {
-    console.error('Save data failed:', e.message);
+    console.error('❌ Save data failed:', e.message);
   }
 }
 
-// استدعاء نموذج AI عبر OpenRouter (mistral-7b-instruct:free)
+// استدعاء نموذج AI عبر OpenRouter (deepseek/deepseek-r1:free)
 async function callAI(prompt) {
   try {
     const res = await axios.post(
@@ -76,7 +83,8 @@ async function callAI(prompt) {
       {
         model: 'deepseek/deepseek-r1:free',
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7
+        temperature: 0.7,
+        max_tokens: 1500
       },
       {
         headers: {
@@ -87,11 +95,12 @@ async function callAI(prompt) {
     );
     return res.data?.choices?.[0]?.message?.content || 'No response';
   } catch (e) {
-    console.error('AI request failed:', e.response?.data || e.message);
+    console.error('❌ AI request failed:', e.response?.data || e.message);
     return 'حدث خطأ أثناء الاتصال بالنموذج.';
   }
 }
 
+// تحليل الملفات المرفقة
 async function analyzeFile(att, msg) {
   const filePath = path.join(TMP, `${Date.now()}_${att.name}`);
   try {
@@ -99,110 +108,219 @@ async function analyzeFile(att, msg) {
     fs.writeFileSync(filePath, res.data);
     const ext = path.extname(att.name).toLowerCase();
     let result = '';
-    if (['.txt', '.json'].includes(ext)) {
+    if (['.txt', '.json', '.js', '.py', '.md'].includes(ext)) {
       const content = fs.readFileSync(filePath, 'utf8');
-      result = await callAI(`Analyze this text:\n${content}`);
-    } else if (['.jpg', '.png', '.gif'].includes(ext)) {
-      result = await callAI('Describe this image in detail.');
+      result = await callAI(`قم بتحليل هذا النص البرمجي أو المحتوى:\n${content}`);
+    } else if (['.jpg', '.jpeg', '.png', '.gif'].includes(ext)) {
+      result = await callAI('وصف دقيق لهذه الصورة.');
     } else {
-      result = 'Unsupported file type';
+      result = 'نوع الملف غير مدعوم للتحليل.';
     }
     await msg.reply(result);
-  } catch {
-    await msg.reply('File analysis error');
+  } catch (e) {
+    console.error('❌ File analysis error:', e.message);
+    await msg.reply('حدث خطأ أثناء تحليل الملف.');
   } finally {
     try { fs.unlinkSync(filePath); } catch {}
   }
 }
 
-function canSensitive(s, u, m) {
+// صلاحيات الأوامر الخاصة
+function canSensitive(serverData, userId, member) {
   return (
-    s.sensitive?.all ||
-    s.sensitive?.allowed?.includes(u) ||
-    m.permissions.has(PermissionsBitField.Flags.Administrator)
+    serverData.sensitive?.all ||
+    serverData.sensitive?.allowed?.includes(userId) ||
+    member.permissions.has(PermissionsBitField.Flags.Administrator)
   );
 }
 
-function canGeneral(s, u) {
-  return s.general?.all || s.general?.allowed?.includes(u);
+// صلاحيات الأوامر العامة
+function canGeneral(serverData, userId) {
+  return serverData.general?.all || serverData.general?.allowed?.includes(userId);
 }
 
+// سجل بسيط لتتبع الأداء
+function logCommandExecution(cmd, userId) {
+  const time = new Date().toLocaleString();
+  console.log(`[${time}] User ${userId} executed command: ${cmd}`);
+}
+
+// عند تشغيل البوت
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   await loadData();
 });
 
+// استقبال الرسائل
 client.on('messageCreate', async msg => {
-  if (msg.author.bot || !msg.content.startsWith('!')) return;
-
-  const args = msg.content.slice(1).trim().split(/ +/);
-  const cmd = args.shift().toLowerCase();
-  const userId = msg.author.id;
-  const guildId = msg.guild?.id;
-
-  dataCache.users[userId] ||= { balance: 0, history: [] };
-  dataCache.servers[guildId] ||= {
-    sensitive: { all: false, allowed: [] },
-    general: { all: true, allowed: [] },
-    channels: {}
-  };
-  dataCache.settings[guildId] ||= {};
-
-  const userData = dataCache.users[userId];
-  const serverData = dataCache.servers[guildId];
-
   try {
+    if (msg.author.bot || !msg.content.startsWith('!')) return;
+
+    const args = msg.content.slice(1).trim().split(/ +/);
+    const cmd = args.shift().toLowerCase();
+    const userId = msg.author.id;
+    const guildId = msg.guild?.id || 'dm';
+
+    // إعداد البيانات
+    dataCache.users[userId] ||= { balance: 0, history: [] };
+    dataCache.servers[guildId] ||= {
+      sensitive: { all: false, allowed: [] },
+      general: { all: true, allowed: [] },
+      channels: {}
+    };
+    dataCache.settings[guildId] ||= {};
+
+    const userData = dataCache.users[userId];
+    const serverData = dataCache.servers[guildId];
+    const member = msg.member;
+
+    logCommandExecution(cmd, userId);
+
     switch (cmd) {
       case 'رصيدي':
-        return msg.reply(`رصيدك: ${userData.balance}`);
+        return msg.reply(`رصيدك الحالي: ${userData.balance} نقطة.`);
+
       case 'اضف':
-        if (userId !== BOT_OWNER_ID) return msg.reply('غير مخول');
+        if (userId !== BOT_OWNER_ID) return msg.reply('❌ أنت غير مخول لاستخدام هذا الأمر.');
+        if (args.length < 2) return msg.reply('الاستخدام: !اضف @user عدد');
         const mention = msg.mentions.users.first();
         const amount = parseInt(args[1]);
-        if (!mention || isNaN(amount) || amount <= 0) return msg.reply('الاستخدام: !اضف @user amount');
+        if (!mention || isNaN(amount) || amount <= 0) return msg.reply('يرجى ذكر مستخدم صالح وكمية صحيحة.');
         dataCache.users[mention.id] ||= { balance: 0, history: [] };
         dataCache.users[mention.id].balance += amount;
         await saveData();
-        return msg.reply(`تم إضافة ${amount} إلى ${mention.tag}`);
+        return msg.reply(`✅ تم إضافة ${amount} نقطة إلى ${mention.tag}.`);
+
       case 'حول':
+        if (args.length < 2) return msg.reply('الاستخدام: !حول @user عدد');
         const to = msg.mentions.users.first();
         const amt = parseInt(args[1]);
-        if (!to || isNaN(amt) || amt <= 0) return msg.reply('الاستخدام: !حول @user amount');
-        if (userData.balance < amt) return msg.reply('رصيدك غير كافي');
+        if (!to || isNaN(amt) || amt <= 0) return msg.reply('يرجى ذكر مستخدم صالح وكمية صحيحة.');
+        if (userData.balance < amt) return msg.reply('رصيدك غير كافٍ.');
         dataCache.users[to.id] ||= { balance: 0, history: [] };
         userData.balance -= amt;
         dataCache.users[to.id].balance += amt;
         await saveData();
-        return msg.reply(`تم تحويل ${amt} إلى ${to.tag}`);
-      case 'gemini':
-        if (!args.length) return msg.reply('اكتب سؤالك بعد الأمر');
-        userData.history.push(args.join(' '));
+        return msg.reply(`✅ تم تحويل ${amt} نقطة إلى ${to.tag}.`);
+
+      case 'ai':
+        if (!args.length) return msg.reply('يرجى كتابة سؤالك بعد الأمر.');
+        const prompt = args.join(' ');
+        userData.history.push(prompt);
         if (userData.history.length > 20) userData.history.shift();
-        const aiResponse = await callAI(userData.history.join('\n'));
-        await msg.reply(aiResponse);
+
+        // هل الطلب يتعلق بإضافة أو تعديل كود؟
+        const codeIntent = /^(.*(?:أنشئ|اصنع|أضف|اضافة|كود|أمر جديد).*)$/i.test(prompt);
+
+        if (codeIntent) {
+          // بناء prompt لتوليد الكود فقط
+          const devPrompt = `
+لدي بوت ديسكورد مبني بـ discord.js. هذا هو الكود الحالي:
+"""
+${fs.readFileSync(__filename, 'utf8').slice(0, 8000)}
+"""
+الطلب: ${prompt}
+أريدك أن تُنشئ فقط الكود الجديد اللازم (بلغة JavaScript) لتنفيذ هذا الطلب،
+على شكل وحدة module.exports تصلح للتنفيذ في NodeVM داخل البوت. بدون شرح، فقط الكود.
+`;
+
+          const generatedCode = await callAI(devPrompt);
+
+          if (!/module\.exports\s*=/.test(generatedCode)) {
+            return msg.reply('⚠️ لم أتمكن من توليد كود صالح.');
+          }
+
+          // تنفيذ الكود داخل VM آمن
+          try {
+            const vm = new NodeVM({ timeout: 5000, sandbox: { client, msg, dataCache, console } });
+            const result = await vm.run(generatedCode)();
+            await msg.reply(`✅ الكود تم تنفيذه بنجاح:\n${result ?? 'تم التنفيذ.'}`);
+          } catch (e) {
+            await msg.reply(`❌ فشل تنفيذ الكود:\n${e.message}`);
+          }
+
+          await saveData();
+          return;
+        }
+
+        // طلب عادي للنموذج
+        const response = await callAI(userData.history.join('\n'));
+        await msg.reply(response);
         await saveData();
         return;
+
       case 'ملف':
-        if (!msg.attachments.size) return msg.reply('أرفق الملف أولاً');
+        if (!msg.attachments.size) return msg.reply('يرجى إرفاق ملف أولاً.');
         return analyzeFile(msg.attachments.first(), msg);
+
       case 'شغلاداة':
-        if (userId !== BOT_OWNER_ID) return msg.reply('غير مخول');
-        if (!args.length) return msg.reply('ضع كود للتنفيذ');
+        if (userId !== BOT_OWNER_ID) return msg.reply('❌ أنت غير مخول لاستخدام هذا الأمر.');
+        if (!args.length) return msg.reply('يرجى كتابة كود للتنفيذ.');
         try {
           const vm = new NodeVM({ timeout: 5000, sandbox: { client, msg, dataCache } });
           const result = await vm.run(`module.exports = async () => { ${args.join(' ')} }`)();
-          return msg.reply(`النتيجة: ${result}`);
+          return msg.reply(`🔧 النتيجة: ${result}`);
         } catch (e) {
-          return msg.reply(`خطأ بالتنفيذ: ${e.message}`);
+          return msg.reply(`❌ خطأ بالتنفيذ: ${e.message}`);
         }
+
+      case 'تذاكر':
+        if (!serverData.tickets) serverData.tickets = {};
+        if (!args.length) return msg.reply('اكتب: !تذاكر انشاء | !تذاكر اغلاق | !تذاكر الحالة');
+        switch (args[0]) {
+          case 'انشاء':
+            if (serverData.tickets[userId]) return msg.reply('لديك تذكرة مفتوحة بالفعل.');
+            const channel = await msg.guild.channels.create({
+              name: `ticket-${msg.author.username}`,
+              type: 0,
+              permissionOverwrites: [
+                { id: msg.guild.roles.everyone.id, deny: ['ViewChannel'] },
+                { id: userId, allow: ['ViewChannel', 'SendMessages'] }
+              ]
+            });
+            serverData.tickets[userId] = channel.id;
+            await saveData();
+            return msg.reply(`تم إنشاء تذكرتك في القناة: <#${channel.id}>`);
+          case 'اغلاق':
+            if (!serverData.tickets[userId]) return msg.reply('ليس لديك تذكرة مفتوحة.');
+            const chId = serverData.tickets[userId];
+            const ticketChannel = msg.guild.channels.cache.get(chId);
+            if (ticketChannel) await ticketChannel.delete();
+            delete serverData.tickets[userId];
+            await saveData();
+            return msg.reply('تم إغلاق تذكرتك.');
+          case 'الحالة':
+            return msg.reply(
+              serverData.tickets[userId]
+                ? `تذكرتك مفتوحة في القناة: <#${serverData.tickets[userId]}>`
+                : 'ليس لديك تذكرة مفتوحة.'
+            );
+          default:
+            return msg.reply('الأوامر المتاحة: انشاء، اغلاق، الحالة');
+        }
+
+      case 'مساعدة':
+        return msg.reply(
+          '🛠️ **أوامر البوت:**\n' +
+          '!رصيدي - عرض رصيدك من النقاط\n' +
+          '!اضف @user عدد - إضافة نقاط (للمالك فقط)\n' +
+          '!حول @user عدد - تحويل نقاط لمستخدم آخر\n' +
+          '!ai نص - تحدث مع الذكاء الاصطناعي أو اطلب إضافة/تعديل كود\n' +
+          '!ملف + إرفاق ملف - تحليل ملف\n' +
+          '!شغلاداة كود - تنفيذ كود (للمالك فقط)\n' +
+          '!تذاكر انشاء/اغلاق/الحالة - إدارة التذاكر\n' +
+          '!مساعدة - عرض هذه الرسالة'
+        );
+
       default:
         if (!canGeneral(serverData, userId)) return;
-        return msg.reply('أمر غير معروف');
+        return msg.reply('❓ أمر غير معروف، اكتب !مساعدة لمعرفة الأوامر.');
     }
   } catch (e) {
-    console.error(`Command ${cmd} failed:`, e);
+    console.error(`❌ Command error:`, e);
     msg.reply('حدث خطأ أثناء تنفيذ الأمر.');
   }
 });
 
+// تسجيل الدخول
 client.login(DISCORD);
