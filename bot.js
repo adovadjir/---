@@ -20,7 +20,7 @@ const client = new Client({
 
 // قراءة المتغيرات من بيئة التشغيل
 const {
-  DISCORD_TOKEN,
+  DISCORD,
   GITHUB_TOKEN,
   GITHUB_REPO,
   GITHUB_FILE = 'data/users.json',
