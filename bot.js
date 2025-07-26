@@ -74,7 +74,7 @@ async function callAI(prompt) {
     const res = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
-        model: 'mistralai/mistral-7b-instruct:free',
+        model: 'deepseek/deepseek-r1:free',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7
       },
