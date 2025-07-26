@@ -81,7 +81,7 @@ async function callAI(prompt) {
     const res = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
-        model: 'nvidia/llama-3.1-nemotron-nano-8b-v1:free',
+        model: 'nvidia/llama-3.1-nemotron-nano-8b-v1',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         max_tokens: 1500
